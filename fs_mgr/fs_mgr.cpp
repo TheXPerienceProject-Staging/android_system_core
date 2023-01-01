@@ -1428,6 +1428,8 @@ MountAllResult fs_mgr_mount_all(Fstab* fstab, int mount_mode) {
        ((strncmp(propbuf_buid_type, "eng", 3) == 0) || (strncmp(propbuf_buid_type, "userdebug", 9) == 0)))
         is_ffbm = true;
 
+    bool scratch_can_be_mounted = true;
+
     // Keep i int to prevent unsigned integer overflow from (i = top_idx - 1),
     // where top_idx is 0. It will give SIGABRT
     for (int i = 0; i < static_cast<int>(fstab->size()); i++) {
@@ -1564,6 +1566,9 @@ MountAllResult fs_mgr_mount_all(Fstab* fstab, int mount_mode) {
             if (current_entry.mount_point == "/data") {
                 userdata_mounted = true;
             }
+
+            MountOverlayfs(attempted_entry, &scratch_can_be_mounted);
+
             // Success!  Go get the next one.
             continue;
         }
@@ -1654,10 +1659,6 @@ MountAllResult fs_mgr_mount_all(Fstab* fstab, int mount_mode) {
     }
 
     set_type_property(encryptable);
-
-#if ALLOW_ADBD_DISABLE_VERITY == 1  // "userdebug" build
-    fs_mgr_overlayfs_mount_all(fstab);
-#endif
 
     if (error_count) {
         return {FS_MGR_MNTALL_FAIL, userdata_mounted};
