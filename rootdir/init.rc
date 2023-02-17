@@ -47,6 +47,9 @@ on early-init
     # Allow up to 32K FDs per process
     setrlimit nofile 32768 32768
 
+    # set RLIMIT_MEMLOCK to 64KB
+    setrlimit memlock 65536 65536
+
     # Set up linker config subdirectories based on mount namespaces
     mkdir /linkerconfig/bootstrap 0755
     mkdir /linkerconfig/default 0755
@@ -640,7 +643,7 @@ on late-fs
     chmod 0755 /sys/kernel/tracing
     chmod 0755 /sys/kernel/debug/tracing
 
-    # HALs required before storage encryption can get unlocked (FBE/FDE)
+    # HALs required before storage encryption can get unlocked (FBE)
     class_start early_hal
 
     # Load trusted keys from dm-verity protected partitions
@@ -743,9 +746,8 @@ on post-fs-data
 
     # /data/apex is now available. Start apexd to scan and activate APEXes.
     #
-    # To handle userspace reboots as well as devices that use FDE, make sure
-    # that apexd is started cleanly here (set apexd.status="") and that it is
-    # restarted if it's already running.
+    # To handle userspace reboots, make sure that apexd is started cleanly here
+    # (set apexd.status="") and that it is restarted if it's already running.
     #
     # /data/apex uses encryption=None because direct I/O support is needed on
     # APEX files, but some devices don't support direct I/O on encrypted files.
@@ -847,7 +849,7 @@ on post-fs-data
     # Delete any stale files owned by the old virtualizationservice uid (b/230056726).
     chmod 0770 /data/misc/virtualizationservice
     exec - virtualizationservice system -- /bin/rm -rf /data/misc/virtualizationservice
-    mkdir /data/misc/virtualizationservice 0770 system system
+    mkdir /data/misc/virtualizationservice 0771 system system
 
     # /data/preloads uses encryption=None because it only contains preloaded
     # files that are public information, similar to the system image.
@@ -991,6 +993,7 @@ on post-fs-data
     # Create directories for statsd
     mkdir /data/misc/stats-active-metric/ 0770 statsd system
     mkdir /data/misc/stats-data/ 0770 statsd system
+    mkdir /data/misc/stats-data/restricted-data 0770 statsd system
     mkdir /data/misc/stats-metadata/ 0770 statsd system
     mkdir /data/misc/stats-service/ 0770 statsd system
     mkdir /data/misc/train-info/ 0770 statsd system
@@ -1283,13 +1286,16 @@ service console /system/bin/sh
     group shell log readproc
     seclabel u:r:shell:s0
     setenv HOSTNAME console
+    shutdown critical
 
 on property:ro.debuggable=1
-    # Give writes to anyone for the trace folder on debug builds.
+    # Give writes to the same group for the trace folder on debug builds,
+    # it's further protected by selinux policy.
     # The folder is used to store method traces.
     chmod 0773 /data/misc/trace
-    # Give reads to anyone for the window trace folder on debug builds.
-    chmod 0775 /data/misc/wmtrace
+    # Give writes and reads to anyone for the window trace folder on debug builds,
+    # it's further protected by selinux policy.
+    chmod 0777 /data/misc/wmtrace
     # Give reads to anyone for the accessibility trace folder on debug builds.
     chmod 0775 /data/misc/a11ytrace
 
