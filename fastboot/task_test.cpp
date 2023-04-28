@@ -16,6 +16,7 @@
 
 #include "task.h"
 #include "fastboot.h"
+#include "fastboot_driver_mock.h"
 
 #include <gtest/gtest.h>
 #include <fstream>
@@ -24,6 +25,7 @@
 #include <unordered_map>
 #include "android-base/strings.h"
 using android::base::Split;
+using testing::_;
 
 class ParseTest : public ::testing ::Test {
   protected:
@@ -58,7 +60,7 @@ std::unique_ptr<Task> ParseCommand(FlashingPlan* fp, std::string command) {
     return ParseFastbootInfoLine(fp, vec_command);
 }
 
-TEST_F(ParseTest, CORRECT_FlASH_TASK_FORMED) {
+TEST_F(ParseTest, CorrectFlashTaskFormed) {
     std::vector<std::string> commands = {"flash dtbo", "flash --slot-other system system_other.img",
                                          "flash system", "flash --apply-vbmeta vbmeta"};
 
@@ -86,7 +88,7 @@ TEST_F(ParseTest, CORRECT_FlASH_TASK_FORMED) {
     }
 }
 
-TEST_F(ParseTest, VERSION_CHECK_CORRRECT) {
+TEST_F(ParseTest, VersionCheckCorrect) {
     std::vector<std::string> correct_versions = {
             "version 1.0",
             "version 22.00",
@@ -104,7 +106,7 @@ TEST_F(ParseTest, VERSION_CHECK_CORRRECT) {
     }
 }
 
-TEST_F(ParseTest, BAD_FASTBOOT_INFO_INPUT) {
+TEST_F(ParseTest, BadFastbootInput) {
     ASSERT_EQ(ParseCommand(fp.get(), "flash"), nullptr);
     ASSERT_EQ(ParseCommand(fp.get(), "flash --slot-other --apply-vbmeta"), nullptr);
     ASSERT_EQ(ParseCommand(fp.get(), "flash --apply-vbmeta"), nullptr);
@@ -120,4 +122,33 @@ TEST_F(ParseTest, BAD_FASTBOOT_INFO_INPUT) {
     ASSERT_EQ(ParseCommand(fp.get(), "erase"), nullptr);
     ASSERT_EQ(ParseCommand(fp.get(), "erase dtbo dtbo"), nullptr);
     ASSERT_EQ(ParseCommand(fp.get(), "wipe this"), nullptr);
+}
+
+TEST_F(ParseTest, CorrectTaskFormed) {
+    std::vector<std::string> commands = {"flash dtbo", "flash --slot-other system system_other.img",
+                                         "reboot bootloader", "update-super", "erase cache"};
+    std::vector<std::unique_ptr<Task>> tasks = collectTasks(fp.get(), commands);
+
+    ASSERT_TRUE(tasks[0]->AsFlashTask());
+    ASSERT_TRUE(tasks[0]->AsFlashTask());
+    ASSERT_TRUE(tasks[1]->AsFlashTask());
+    ASSERT_TRUE(tasks[2]->AsRebootTask());
+    ASSERT_TRUE(tasks[3]->AsUpdateSuperTask());
+    ASSERT_TRUE(tasks[4]->AsWipeTask());
+}
+
+TEST_F(ParseTest, CorrectDriverCalls) {
+    fastboot::MockFastbootDriver fb;
+    fp->fb = &fb;
+
+    EXPECT_CALL(fb, RebootTo(_, _, _)).Times(1);
+    EXPECT_CALL(fb, Reboot(_, _)).Times(1);
+    EXPECT_CALL(fb, WaitForDisconnect()).Times(2);
+
+    std::vector<std::string> commands = {"reboot bootloader", "reboot"};
+    std::vector<std::unique_ptr<Task>> tasks = collectTasks(fp.get(), commands);
+
+    for (auto& task : tasks) {
+        task->Run();
+    }
 }
