@@ -80,16 +80,13 @@ bool ReadFdFileDescriptor::Flush() {
 bool CompressedSnapshotReader::SetCow(std::unique_ptr<CowReader>&& cow) {
     cow_ = std::move(cow);
 
-    CowHeader header;
-    if (!cow_->GetHeader(&header)) {
-        return false;
-    }
+    const auto& header = cow_->GetHeader();
     block_size_ = header.block_size;
 
     // Populate the operation map.
     op_iter_ = cow_->GetOpIter();
-    while (!op_iter_->Done()) {
-        const CowOperation* op = &op_iter_->Get();
+    while (!op_iter_->AtEnd()) {
+        const CowOperation* op = op_iter_->Get();
         if (IsMetadataOp(*op)) {
             op_iter_->Next();
             continue;
@@ -208,7 +205,7 @@ ssize_t CompressedSnapshotReader::ReadBlock(uint64_t chunk, size_t start_offset,
     } else if (op->type == kCowZeroOp) {
         memset(buffer, 0, bytes_to_read);
     } else if (op->type == kCowReplaceOp) {
-        if (cow_->ReadData(*op, buffer, bytes_to_read, start_offset) < bytes_to_read) {
+        if (cow_->ReadData(op, buffer, bytes_to_read, start_offset) < bytes_to_read) {
             LOG(ERROR) << "CompressedSnapshotReader failed to read replace op";
             errno = EIO;
             return -1;
@@ -229,7 +226,7 @@ ssize_t CompressedSnapshotReader::ReadBlock(uint64_t chunk, size_t start_offset,
             return -1;
         }
 
-        if (cow_->ReadData(*op, buffer, bytes_to_read, start_offset) < bytes_to_read) {
+        if (cow_->ReadData(op, buffer, bytes_to_read, start_offset) < bytes_to_read) {
             LOG(ERROR) << "CompressedSnapshotReader failed to read xor op";
             errno = EIO;
             return -1;
