@@ -643,21 +643,38 @@ TEST_F(SnapshotTest, FirstStageMountAfterRollback) {
 TEST_F(SnapshotTest, Merge) {
     ASSERT_TRUE(AcquireLock());
 
-    static const uint64_t kDeviceSize = 1024 * 1024;
-
-    std::unique_ptr<ISnapshotWriter> writer;
-    ASSERT_TRUE(PrepareOneSnapshot(kDeviceSize, &writer));
-
-    bool userspace_snapshots = sm->UpdateUsesUserSnapshots(lock_.get());
-
-    // Release the lock.
-    lock_ = nullptr;
+    static constexpr uint64_t kDeviceSize = 1024 * 1024;
+    static constexpr uint32_t kBlockSize = 4096;
 
     std::string test_string = "This is a test string.";
-    test_string.resize(writer->options().block_size);
-    ASSERT_TRUE(writer->AddRawBlocks(0, test_string.data(), test_string.size()));
-    ASSERT_TRUE(writer->Finalize());
-    writer = nullptr;
+    test_string.resize(kBlockSize);
+
+    bool userspace_snapshots = false;
+    if (snapuserd_required_) {
+        std::unique_ptr<ISnapshotWriter> writer;
+        ASSERT_TRUE(PrepareOneSnapshot(kDeviceSize, &writer));
+
+        userspace_snapshots = sm->UpdateUsesUserSnapshots(lock_.get());
+
+        // Release the lock.
+        lock_ = nullptr;
+
+        ASSERT_TRUE(writer->AddRawBlocks(0, test_string.data(), test_string.size()));
+        ASSERT_TRUE(writer->Finalize());
+        writer = nullptr;
+    } else {
+        ASSERT_TRUE(PrepareOneSnapshot(kDeviceSize));
+
+        // Release the lock.
+        lock_ = nullptr;
+
+        std::string path;
+        ASSERT_TRUE(dm_.GetDmDevicePathByName("test_partition_b", &path));
+
+        unique_fd fd(open(path.c_str(), O_WRONLY));
+        ASSERT_GE(fd, 0);
+        ASSERT_TRUE(android::base::WriteFully(fd, test_string.data(), test_string.size()));
+    }
 
     // Done updating.
     ASSERT_TRUE(sm->FinishedSnapshotWrites(false));
@@ -2632,6 +2649,24 @@ TEST_F(SnapshotUpdateTest, QueryStatusError) {
     ASSERT_NE(init, nullptr);
     ASSERT_TRUE(init->CreateLogicalAndSnapshotPartitions("super", snapshot_timeout_));
     ASSERT_EQ(UpdateState::MergeCompleted, init->ProcessUpdateState());
+}
+
+TEST_F(SnapshotUpdateTest, BadCowVersion) {
+    if (!snapuserd_required_) {
+        GTEST_SKIP() << "VABC only";
+    }
+
+    ASSERT_TRUE(sm->BeginUpdate());
+
+    auto dynamic_partition_metadata = manifest_.mutable_dynamic_partition_metadata();
+    dynamic_partition_metadata->set_cow_version(kMinCowVersion - 1);
+    ASSERT_FALSE(sm->CreateUpdateSnapshots(manifest_));
+
+    dynamic_partition_metadata->set_cow_version(kMaxCowVersion + 1);
+    ASSERT_FALSE(sm->CreateUpdateSnapshots(manifest_));
+
+    dynamic_partition_metadata->set_cow_version(kMaxCowVersion);
+    ASSERT_TRUE(sm->CreateUpdateSnapshots(manifest_));
 }
 
 class FlashAfterUpdateTest : public SnapshotUpdateTest,
