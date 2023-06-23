@@ -1076,9 +1076,7 @@ static bool load_buf(const char* fname, struct fastboot_buffer* buf) {
     unique_fd fd(TEMP_FAILURE_RETRY(open(fname, O_RDONLY | O_BINARY)));
 
     if (fd == -1) {
-        auto path = find_item_given_name(fname);
-        fd = unique_fd(TEMP_FAILURE_RETRY(open(path.c_str(), O_RDONLY | O_BINARY)));
-        if (fd == -1) return false;
+        return false;
     }
 
     struct stat s;
@@ -1902,16 +1900,6 @@ void FlashAllTool::FlashImage(const Image& image, const std::string& slot, fastb
     do_for_partitions(image.part_name, slot, flash, false);
 }
 
-class ZipImageSource final : public ImageSource {
-  public:
-    explicit ZipImageSource(ZipArchiveHandle zip) : zip_(zip) {}
-    bool ReadFile(const std::string& name, std::vector<char>* out) const override;
-    unique_fd OpenFile(const std::string& name) const override;
-
-  private:
-    ZipArchiveHandle zip_;
-};
-
 bool ZipImageSource::ReadFile(const std::string& name, std::vector<char>* out) const {
     return UnzipToMemory(zip_, name, out);
 }
@@ -1934,12 +1922,6 @@ static void do_update(const char* filename, FlashingPlan* fp) {
 
     CloseArchive(zip);
 }
-
-class LocalImageSource final : public ImageSource {
-  public:
-    bool ReadFile(const std::string& name, std::vector<char>* out) const override;
-    unique_fd OpenFile(const std::string& name) const override;
-};
 
 bool LocalImageSource::ReadFile(const std::string& name, std::vector<char>* out) const {
     auto path = find_item_given_name(name);
@@ -2209,6 +2191,7 @@ int FastBootTool::Main(int argc, char* argv[]) {
                                       {"cmdline", required_argument, 0, 0},
                                       {"disable-verification", no_argument, 0, 0},
                                       {"disable-verity", no_argument, 0, 0},
+                                      {"disable-super-optimization", no_argument, 0, 0},
                                       {"force", no_argument, 0, 0},
                                       {"fs-options", required_argument, 0, 0},
                                       {"header-version", required_argument, 0, 0},
@@ -2246,6 +2229,8 @@ int FastBootTool::Main(int argc, char* argv[]) {
                 g_disable_verification = true;
             } else if (name == "disable-verity") {
                 g_disable_verity = true;
+            } else if (name == "disable-super-optimization") {
+                fp->should_optimize_flash_super = false;
             } else if (name == "force") {
                 fp->force_flash = true;
             } else if (name == "fs-options") {
