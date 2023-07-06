@@ -396,7 +396,7 @@ static Transport* NetworkDeviceConnected(bool print = false) {
 
     ConnectedDevicesStorage storage;
     std::set<std::string> devices;
-    {
+    if (storage.Exists()) {
         FileLock lock = storage.Lock();
         devices = storage.ReadDevices(lock);
     }
@@ -1780,32 +1780,11 @@ void FlashAllTool::Flash() {
     }
 
     DetermineSlot();
-    CollectImages();
 
     CancelSnapshotIfNeeded();
 
-    std::vector<char> contents;
-    if (!fp_->source->ReadFile("fastboot-info.txt", &contents)) {
-        LOG(VERBOSE) << "Flashing from hardcoded images. fastboot-info.txt is empty or does not "
-                        "exist";
-        HardcodedFlash();
-        return;
-    }
-
-    std::vector<std::unique_ptr<Task>> tasks =
-            ParseFastbootInfo(fp_, Split({contents.data(), contents.size()}, "\n"));
-
-    if (tasks.empty()) {
-        LOG(FATAL) << "Invalid fastboot-info.txt file.";
-    }
-    LOG(VERBOSE) << "Flashing from fastboot-info.txt";
-    for (auto& task : tasks) {
-        task->Run();
-    }
-    if (fp_->wants_wipe) {
-        // avoid adding duplicate wipe tasks in fastboot main code.
-        fp_->wants_wipe = false;
-    }
+    HardcodedFlash();
+    return;
 }
 
 void FlashAllTool::CheckRequirements() {
@@ -2251,7 +2230,9 @@ int FastBootTool::Main(int argc, char* argv[]) {
                                       {"version", no_argument, 0, 0},
                                       {0, 0, 0, 0}};
 
-    serial = getenv("ANDROID_SERIAL");
+    serial = getenv("FASTBOOT_DEVICE");
+    if (!serial)
+        serial = getenv("ANDROID_SERIAL");
 
     int c;
     while ((c = getopt_long(argc, argv, "a::hls:S:vw", longopts, &longindex)) != -1) {
@@ -2603,10 +2584,13 @@ int FastBootTool::Main(int argc, char* argv[]) {
         if (fp->force_flash) {
             CancelSnapshotIfNeeded();
         }
+        std::vector<std::unique_ptr<Task>> wipe_tasks;
         std::vector<std::string> partitions = {"userdata", "cache", "metadata"};
         for (const auto& partition : partitions) {
-            tasks.emplace_back(std::make_unique<WipeTask>(fp.get(), partition));
+            wipe_tasks.emplace_back(std::make_unique<WipeTask>(fp.get(), partition));
         }
+        tasks.insert(tasks.begin(), std::make_move_iterator(wipe_tasks.begin()),
+                     std::make_move_iterator(wipe_tasks.end()));
     }
     if (fp->wants_set_active) {
         fb->SetActive(next_active);
