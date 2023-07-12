@@ -306,10 +306,10 @@ bool Worker::ReadDmUserHeader() {
 }
 
 // Send the payload/data back to dm-user misc device.
-bool Worker::WriteDmUserPayload(size_t size, bool header_response) {
+bool Worker::WriteDmUserPayload(size_t size) {
     size_t payload_size = size;
     void* buf = bufsink_.GetPayloadBufPtr();
-    if (header_response) {
+    if (header_response_) {
         payload_size += sizeof(struct dm_user_header);
         buf = bufsink_.GetBufPtr();
     }
@@ -319,6 +319,9 @@ bool Worker::WriteDmUserPayload(size_t size, bool header_response) {
         return false;
     }
 
+    // After the first header is sent in response to a request, we cannot
+    // send any additional headers.
+    header_response_ = false;
     return true;
 }
 
@@ -341,7 +344,7 @@ bool Worker::ReadDataFromBaseDevice(sector_t sector, size_t read_size) {
     return true;
 }
 
-bool Worker::ReadAlignedSector(sector_t sector, size_t sz, bool header_response) {
+bool Worker::ReadAlignedSector(sector_t sector, size_t sz) {
     struct dm_user_header* header = bufsink_.GetHeaderPtr();
     size_t remaining_size = sz;
     std::vector<std::pair<sector_t, const CowOperation*>>& chunk_vec = snapuserd_->GetChunkVec();
@@ -389,10 +392,7 @@ bool Worker::ReadAlignedSector(sector_t sector, size_t sz, bool header_response)
 
             // Just return the header if it is an error
             if (header->type == DM_USER_RESP_ERROR) {
-                if (!RespondIOError(header_response)) {
-                    return false;
-                }
-
+                RespondIOError();
                 io_error = true;
                 break;
             }
@@ -404,14 +404,12 @@ bool Worker::ReadAlignedSector(sector_t sector, size_t sz, bool header_response)
         }
 
         if (!io_error) {
-            if (!WriteDmUserPayload(total_bytes_read, header_response)) {
+            if (!WriteDmUserPayload(total_bytes_read)) {
                 return false;
             }
 
             SNAP_LOG(DEBUG) << "WriteDmUserPayload success total_bytes_read: " << total_bytes_read
-                            << " header-response: " << header_response
                             << " remaining_size: " << remaining_size;
-            header_response = false;
             remaining_size -= total_bytes_read;
         }
     } while (remaining_size > 0 && !io_error);
@@ -484,7 +482,6 @@ bool Worker::ReadUnalignedSector(sector_t sector, size_t size) {
     // to any COW ops. In that case, we just need to read from the base
     // device.
     bool merge_complete = false;
-    bool header_response = true;
     if (it == chunk_vec.end()) {
         if (chunk_vec.size() > 0) {
             // I/O request beyond the last mapped sector
@@ -503,7 +500,7 @@ bool Worker::ReadUnalignedSector(sector_t sector, size_t size) {
             --it;
         }
     } else {
-        return ReadAlignedSector(sector, size, header_response);
+        return ReadAlignedSector(sector, size);
     }
 
     loff_t requested_offset = sector << SECTOR_SHIFT;
@@ -537,7 +534,7 @@ bool Worker::ReadUnalignedSector(sector_t sector, size_t size) {
         if (ret < 0) {
             SNAP_LOG(ERROR) << "ReadUnalignedSector failed for sector: " << sector
                             << " size: " << size << " it->sector: " << it->first;
-            return RespondIOError(header_response);
+            return false;
         }
 
         remaining_size -= ret;
@@ -545,14 +542,13 @@ bool Worker::ReadUnalignedSector(sector_t sector, size_t size) {
         sector += (ret >> SECTOR_SHIFT);
 
         // Send the data back
-        if (!WriteDmUserPayload(total_bytes_read, header_response)) {
+        if (!WriteDmUserPayload(total_bytes_read)) {
             return false;
         }
 
-        header_response = false;
         // If we still have pending data to be processed, this will be aligned I/O
         if (remaining_size) {
-            return ReadAlignedSector(sector, remaining_size, header_response);
+            return ReadAlignedSector(sector, remaining_size);
         }
     } else {
         // This is all about handling I/O request to be routed to base device
@@ -566,21 +562,21 @@ bool Worker::ReadUnalignedSector(sector_t sector, size_t size) {
         CHECK(diff_size <= BLOCK_SZ);
         if (remaining_size < diff_size) {
             if (!ReadDataFromBaseDevice(sector, remaining_size)) {
-                return RespondIOError(header_response);
+                return false;
             }
             total_bytes_read += remaining_size;
 
-            if (!WriteDmUserPayload(total_bytes_read, header_response)) {
+            if (!WriteDmUserPayload(total_bytes_read)) {
                 return false;
             }
         } else {
             if (!ReadDataFromBaseDevice(sector, diff_size)) {
-                return RespondIOError(header_response);
+                return false;
             }
 
             total_bytes_read += diff_size;
 
-            if (!WriteDmUserPayload(total_bytes_read, header_response)) {
+            if (!WriteDmUserPayload(total_bytes_read)) {
                 return false;
             }
 
@@ -588,17 +584,16 @@ bool Worker::ReadUnalignedSector(sector_t sector, size_t size) {
             size_t num_sectors_read = (diff_size >> SECTOR_SHIFT);
             sector += num_sectors_read;
             CHECK(IsBlockAligned(sector << SECTOR_SHIFT));
-            header_response = false;
 
             // If we still have pending data to be processed, this will be aligned I/O
-            return ReadAlignedSector(sector, remaining_size, header_response);
+            return ReadAlignedSector(sector, remaining_size);
         }
     }
 
     return true;
 }
 
-bool Worker::RespondIOError(bool header_response) {
+void Worker::RespondIOError() {
     struct dm_user_header* header = bufsink_.GetHeaderPtr();
     header->type = DM_USER_RESP_ERROR;
     // This is an issue with the dm-user interface. There
@@ -610,15 +605,9 @@ bool Worker::RespondIOError(bool header_response) {
     // this back to dm-user.
     //
     // TODO: Fix the interface
-    CHECK(header_response);
+    CHECK(header_response_);
 
-    if (!WriteDmUserPayload(0, header_response)) {
-        return false;
-    }
-
-    // There is no need to process further as we have already seen
-    // an I/O error
-    return true;
+    WriteDmUserPayload(0);
 }
 
 bool Worker::DmuserReadRequest() {
@@ -626,10 +615,10 @@ bool Worker::DmuserReadRequest() {
 
     // Unaligned I/O request
     if (!IsBlockAligned(header->sector << SECTOR_SHIFT)) {
-        return ReadUnalignedSector(header->sector, header->len);
+        return ReadUnalignedSector(header->sector, header->len) != -1;
     }
 
-    return ReadAlignedSector(header->sector, header->len, true);
+    return ReadAlignedSector(header->sector, header->len);
 }
 
 bool Worker::ProcessIORequest() {
@@ -644,6 +633,8 @@ bool Worker::ProcessIORequest() {
     SNAP_LOG(DEBUG) << "Daemon: msg->sector: " << std::dec << header->sector;
     SNAP_LOG(DEBUG) << "Daemon: msg->type: " << std::dec << header->type;
     SNAP_LOG(DEBUG) << "Daemon: msg->flags: " << std::dec << header->flags;
+
+    header_response_ = true;
 
     switch (header->type) {
         case DM_USER_REQ_MAP_READ: {
