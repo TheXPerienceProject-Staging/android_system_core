@@ -35,6 +35,8 @@ class Task {
   public:
     Task() = default;
     virtual void Run() = 0;
+    virtual std::string ToString() = 0;
+
     virtual FlashTask* AsFlashTask() { return nullptr; }
     virtual RebootTask* AsRebootTask() { return nullptr; }
     virtual UpdateSuperTask* AsUpdateSuperTask() { return nullptr; }
@@ -49,11 +51,12 @@ class FlashTask : public Task {
               const bool apply_vbmeta, const FlashingPlan* fp);
     virtual FlashTask* AsFlashTask() override { return this; }
 
+    void Run() override;
+    std::string ToString() override;
     std::string GetPartition() { return pname_; }
     std::string GetImageName() { return fname_; }
-    std::string GetPartitionAndSlot();
     std::string GetSlot() { return slot_; }
-    void Run() override;
+    std::string GetPartitionAndSlot();
 
   private:
     const std::string pname_;
@@ -69,6 +72,7 @@ class RebootTask : public Task {
     RebootTask(const FlashingPlan* fp, const std::string& reboot_target);
     virtual RebootTask* AsRebootTask() override { return this; }
     void Run() override;
+    std::string ToString() override;
 
   private:
     const std::string reboot_target_ = "";
@@ -85,6 +89,7 @@ class FlashSuperLayoutTask : public Task {
             const FlashingPlan* fp, std::vector<std::unique_ptr<Task>>& tasks);
     using ImageEntry = std::pair<const Image*, std::string>;
     void Run() override;
+    std::string ToString() override;
 
   private:
     const std::string super_name_;
@@ -98,6 +103,7 @@ class UpdateSuperTask : public Task {
     UpdateSuperTask(const FlashingPlan* fp);
     virtual UpdateSuperTask* AsUpdateSuperTask() override { return this; }
     void Run() override;
+    std::string ToString() override;
 
   private:
     const FlashingPlan* fp_;
@@ -108,6 +114,7 @@ class ResizeTask : public Task {
     ResizeTask(const FlashingPlan* fp, const std::string& pname, const std::string& size,
                const std::string& slot);
     void Run() override;
+    std::string ToString() override;
 
   private:
     const FlashingPlan* fp_;
@@ -120,6 +127,7 @@ class DeleteTask : public Task {
   public:
     DeleteTask(FlashingPlan* fp, const std::string& pname);
     void Run() override;
+    std::string ToString() override;
 
   private:
     const FlashingPlan* fp_;
@@ -131,6 +139,7 @@ class WipeTask : public Task {
     WipeTask(const FlashingPlan* fp, const std::string& pname);
     virtual WipeTask* AsWipeTask() override { return this; }
     void Run() override;
+    std::string ToString() override;
 
   private:
     const FlashingPlan* fp_;
