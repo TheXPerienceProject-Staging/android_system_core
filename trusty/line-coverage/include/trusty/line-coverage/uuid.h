@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,22 @@
 
 #pragma once
 
-#include  <sys/types.h>
+#include <stdint.h>
+#include <string.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <pthread.h>
-#endif
+#define UUCMP(u1, u2) if (u1 != u2) return u1 < u2
+
+struct uuid {
+    uint32_t time_low;
+    uint16_t time_mid;
+    uint16_t time_hi_and_version;
+    uint8_t clock_seq_and_node[8];
+
+    bool operator<(const struct uuid& rhs) const
+    {
+        UUCMP(time_low, rhs.time_low);
+        UUCMP(time_mid, rhs.time_mid);
+        UUCMP(time_hi_and_version, rhs.time_hi_and_version);
+        return memcmp(clock_seq_and_node, rhs.clock_seq_and_node, 8);
+    }
+};
