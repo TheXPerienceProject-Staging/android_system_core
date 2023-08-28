@@ -57,6 +57,7 @@
 #include <android-base/result.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
+#include <fs_mgr.h>
 #include <private/android_filesystem_config.h>
 #include <property_info_parser/property_info_parser.h>
 #include <property_info_serializer/property_info_serializer.h>
@@ -115,6 +116,7 @@ static int from_init_socket = -1;
 static int init_socket = -1;
 static bool accept_messages = false;
 static std::mutex accept_messages_lock;
+static std::mutex selinux_check_access_lock;
 static std::thread property_service_thread;
 static std::thread property_service_for_system_thread;
 
@@ -161,6 +163,7 @@ bool CanReadProperty(const std::string& source_context, const std::string& name)
     ucred cr = {.pid = 0, .uid = 0, .gid = 0};
     audit_data.cr = &cr;
 
+    auto lock = std::lock_guard{selinux_check_access_lock};
     return selinux_check_access(source_context.c_str(), target_context, "file", "read",
                                 &audit_data) == 0;
 }
@@ -176,10 +179,9 @@ static bool CheckMacPerms(const std::string& name, const char* target_context,
     audit_data.name = name.c_str();
     audit_data.cr = &cr;
 
-    bool has_access = (selinux_check_access(source_context, target_context, "property_service",
-                                            "set", &audit_data) == 0);
-
-    return has_access;
+    auto lock = std::lock_guard{selinux_check_access_lock};
+    return selinux_check_access(source_context, target_context, "property_service", "set",
+                                &audit_data) == 0;
 }
 
 void NotifyPropertyChange(const std::string& name, const std::string& value) {
@@ -1426,7 +1428,8 @@ static void ProcessKernelDt() {
         return;
     }
 
-    std::unique_ptr<DIR, int (*)(DIR*)> dir(opendir(get_android_dt_dir().c_str()), closedir);
+    std::unique_ptr<DIR, int (*)(DIR*)> dir(opendir(android::fs_mgr::GetAndroidDtDir().c_str()),
+                                            closedir);
     if (!dir) return;
 
     std::string dt_file;
@@ -1437,7 +1440,7 @@ static void ProcessKernelDt() {
             continue;
         }
 
-        std::string file_name = get_android_dt_dir() + dp->d_name;
+        std::string file_name = android::fs_mgr::GetAndroidDtDir() + dp->d_name;
 
         android::base::ReadFileToString(file_name, &dt_file);
         std::replace(dt_file.begin(), dt_file.end(), ',', '.');

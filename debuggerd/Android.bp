@@ -187,6 +187,7 @@ cc_library {
 cc_library_static {
     name: "libdebuggerd",
     defaults: ["debuggerd_defaults"],
+    ramdisk_available: true,
     recovery_available: true,
     vendor_ramdisk_available: true,
 
@@ -220,9 +221,6 @@ cc_library_static {
         "libbase",
         "libcutils",
     ],
-    runtime_libs: [
-        "libdexfile",           // libdexfile_support dependency
-    ],
 
     whole_static_libs: [
         "libasync_safe",
@@ -247,6 +245,19 @@ cc_library_static {
             ],
             exclude_runtime_libs: [
                 "libdexfile",
+            ],
+        },
+        ramdisk: {
+            exclude_static_libs: [
+                "libdexfile_support",
+            ],
+            exclude_runtime_libs: [
+                "libdexfile",
+            ],
+        },
+        android: {
+            runtime_libs: [
+                "libdexfile",           // libdexfile_support dependency
             ],
         },
     },
