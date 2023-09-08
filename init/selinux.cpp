@@ -101,23 +101,14 @@ namespace {
 enum EnforcingStatus { SELINUX_PERMISSIVE, SELINUX_ENFORCING };
 
 EnforcingStatus StatusFromProperty() {
-    EnforcingStatus status = SELINUX_ENFORCING;
-
-    ImportKernelCmdline([&](const std::string& key, const std::string& value) {
-        if (key == "androidboot.selinux" && value == "permissive") {
-            status = SELINUX_PERMISSIVE;
-        }
-    });
-
-    if (status == SELINUX_ENFORCING) {
-        ImportBootconfig([&](const std::string& key, const std::string& value) {
-            if (key == "androidboot.selinux" && value == "permissive") {
-                status = SELINUX_PERMISSIVE;
-            }
-        });
+    std::string value;
+    if (android::fs_mgr::GetKernelCmdline("androidboot.selinux", &value) && value == "permissive") {
+        return SELINUX_PERMISSIVE;
     }
-
-    return status;
+    if (android::fs_mgr::GetBootconfig("androidboot.selinux", &value) && value == "permissive") {
+        return SELINUX_PERMISSIVE;
+    }
+    return SELINUX_ENFORCING;
 }
 
 bool IsEnforcing() {
@@ -744,6 +735,14 @@ void SelinuxAvcLog(char* buf) {
     TEMP_FAILURE_RETRY(send(fd.get(), &request, sizeof(request), 0));
 }
 
+int RestoreconIfExists(const char* path, unsigned int flags) {
+    if (access(path, F_OK) != 0 && errno == ENOENT) {
+        // Avoid error message for path that is expected to not always exist.
+        return 0;
+    }
+    return selinux_android_restorecon(path, flags);
+}
+
 }  // namespace
 
 void SelinuxRestoreContext() {
@@ -766,14 +765,14 @@ void SelinuxRestoreContext() {
     selinux_android_restorecon("/dev/device-mapper", 0);
 
     selinux_android_restorecon("/apex", 0);
-
+    selinux_android_restorecon("/bootstrap-apex", 0);
     selinux_android_restorecon("/linkerconfig", 0);
 
     // adb remount, snapshot-based updates, and DSUs all create files during
     // first-stage init.
-    selinux_android_restorecon(SnapshotManager::GetGlobalRollbackIndicatorPath().c_str(), 0);
-    selinux_android_restorecon("/metadata/gsi", SELINUX_ANDROID_RESTORECON_RECURSE |
-                                                        SELINUX_ANDROID_RESTORECON_SKIP_SEHASH);
+    RestoreconIfExists(SnapshotManager::GetGlobalRollbackIndicatorPath().c_str(), 0);
+    RestoreconIfExists("/metadata/gsi",
+                       SELINUX_ANDROID_RESTORECON_RECURSE | SELINUX_ANDROID_RESTORECON_SKIP_SEHASH);
 }
 
 int SelinuxKlogCallback(int type, const char* fmt, ...) {

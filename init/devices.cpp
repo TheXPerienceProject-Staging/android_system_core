@@ -32,6 +32,7 @@
 #include <android-base/logging.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
+#include <fs_mgr.h>
 #include <libdm/dm.h>
 #include <private/android_filesystem_config.h>
 #include <selinux/android.h>
@@ -203,8 +204,8 @@ std::string DeviceHandler::GetPartitionNameForDevice(const std::string& query_de
                 partition_map.emplace_back(map_pieces[0], map_pieces[1]);
             }
         };
-        ImportKernelCmdline(parser);
-        ImportBootconfig(parser);
+        android::fs_mgr::ImportKernelCmdline(parser);
+        android::fs_mgr::ImportBootconfig(parser);
         return partition_map;
     }();
 

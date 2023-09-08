@@ -729,6 +729,14 @@ bool SnapshotManager::DeleteSnapshot(LockedFile* lock, const std::string& name) 
         LOG(ERROR) << "Failed to remove status file " << file_path << ": " << error;
         return false;
     }
+
+    // This path may never exist. If it is present, then it's a stale
+    // snapshot status file. Just remove the file and log the message.
+    const std::string tmp_path = file_path + ".tmp";
+    if (!android::base::RemoveFileIfExists(tmp_path, &error)) {
+        LOG(ERROR) << "Failed to remove stale snapshot file " << tmp_path;
+    }
+
     return true;
 }
 
@@ -754,10 +762,10 @@ bool SnapshotManager::InitiateMerge() {
         return false;
     }
 
-    auto other_suffix = device_->GetOtherSlotSuffix();
+    auto current_slot_suffix = device_->GetSlotSuffix();
 
     for (const auto& snapshot : snapshots) {
-        if (android::base::EndsWith(snapshot, other_suffix)) {
+        if (!android::base::EndsWith(snapshot, current_slot_suffix)) {
             // Allow the merge to continue, but log this unexpected case.
             LOG(ERROR) << "Unexpected snapshot found during merge: " << snapshot;
             continue;
@@ -1123,7 +1131,7 @@ auto SnapshotManager::CheckMergeState(LockedFile* lock, const std::function<bool
         return MergeResult(UpdateState::MergeFailed, MergeFailureCode::ListSnapshots);
     }
 
-    auto other_suffix = device_->GetOtherSlotSuffix();
+    auto current_slot_suffix = device_->GetSlotSuffix();
 
     bool cancelled = false;
     bool merging = false;
@@ -1131,9 +1139,9 @@ auto SnapshotManager::CheckMergeState(LockedFile* lock, const std::function<bool
     bool wrong_phase = false;
     MergeFailureCode failure_code = MergeFailureCode::Ok;
     for (const auto& snapshot : snapshots) {
-        if (android::base::EndsWith(snapshot, other_suffix)) {
+        if (!android::base::EndsWith(snapshot, current_slot_suffix)) {
             // This will have triggered an error message in InitiateMerge already.
-            LOG(INFO) << "Skipping merge validation of unexpected snapshot: " << snapshot;
+            LOG(ERROR) << "Skipping merge validation of unexpected snapshot: " << snapshot;
             continue;
         }
 
@@ -1248,14 +1256,12 @@ auto SnapshotManager::CheckTargetMergeState(LockedFile* lock, const std::string&
            GetMetadataPartitionState(*current_metadata, name) == MetadataPartitionState::Updated);
 
     if (UpdateUsesUserSnapshots(lock)) {
-        std::string merge_status;
-        if (EnsureSnapuserdConnected()) {
-            // Query the snapshot status from the daemon
-            merge_status = snapuserd_client_->QuerySnapshotStatus(name);
-        } else {
-            MergeResult(UpdateState::MergeFailed, MergeFailureCode::QuerySnapshotStatus);
+        if (!EnsureSnapuserdConnected()) {
+            return MergeResult(UpdateState::MergeFailed, MergeFailureCode::QuerySnapshotStatus);
         }
 
+        // Query the snapshot status from the daemon
+        const auto merge_status = snapuserd_client_->QuerySnapshotStatus(name);
         if (merge_status == "snapshot-merge-failed") {
             return MergeResult(UpdateState::MergeFailed, MergeFailureCode::UnknownTargetType);
         }
