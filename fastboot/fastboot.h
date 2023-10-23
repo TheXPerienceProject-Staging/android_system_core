@@ -148,7 +148,7 @@ class LocalImageSource final : public ImageSource {
 };
 
 char* get_android_product_out();
-bool should_flash_in_userspace(const std::string& partition_name);
+bool should_flash_in_userspace(const ImageSource* source, const std::string& partition_name);
 bool is_userspace_fastboot();
 void do_flash(const char* pname, const char* fname, const bool apply_vbmeta,
               const FlashingPlan* fp);
@@ -187,7 +187,7 @@ int64_t get_sparse_limit(int64_t size, const FlashingPlan* fp);
 std::vector<SparsePtr> resparse_file(sparse_file* s, int64_t max_size);
 
 bool supports_AB(fastboot::IFastBootDriver* fb);
-bool is_retrofit_device(fastboot::IFastBootDriver* fb);
+bool is_retrofit_device(const ImageSource* source);
 bool is_logical(const std::string& partition);
 void fb_perform_format(const std::string& partition, int skip_if_not_supported,
                        const std::string& type_override, const std::string& size_override,
