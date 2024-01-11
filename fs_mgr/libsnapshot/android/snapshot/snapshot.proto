@@ -114,9 +114,6 @@ message SnapshotStatus {
 
     // Enable batching for COW writes
     bool batched_writes = 14;
-
-    // Size of v3 operation buffer. Needs to be determined during writer initialization
-    uint64 estimated_ops_buffer_size = 15;
 }
 
 // Next: 8
@@ -253,7 +250,4 @@ message SnapshotMergeReport {
 
     // Whether this update attempt used io_uring.
     bool iouring_used = 13;
-
-    // Size of v3 operation buffer. Needs to be determined during writer initialization
-    uint64 estimated_op_count_max = 14;
 }
