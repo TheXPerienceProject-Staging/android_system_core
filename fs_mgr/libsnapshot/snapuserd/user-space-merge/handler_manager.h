@@ -58,7 +58,7 @@ class ISnapshotHandlerManager {
                                                       const std::string& base_path_merge,
                                                       std::shared_ptr<IBlockServerOpener> opener,
                                                       int num_worker_threads, bool use_iouring,
-                                                      bool perform_verification) = 0;
+                                                      bool o_direct) = 0;
 
     // Start serving requests on a snapshot handler.
     virtual bool StartHandler(const std::string& misc_name) = 0;
@@ -84,6 +84,9 @@ class ISnapshotHandlerManager {
 
     // Returns whether all snapshots have verified.
     virtual bool GetVerificationStatus() = 0;
+
+    // Disable partition verification
+    virtual void DisableVerification() = 0;
 };
 
 class SnapshotHandlerManager final : public ISnapshotHandlerManager {
@@ -95,7 +98,7 @@ class SnapshotHandlerManager final : public ISnapshotHandlerManager {
                                               const std::string& base_path_merge,
                                               std::shared_ptr<IBlockServerOpener> opener,
                                               int num_worker_threads, bool use_iouring,
-                                              bool perform_verification) override;
+                                              bool o_direct) override;
     bool StartHandler(const std::string& misc_name) override;
     bool DeleteHandler(const std::string& misc_name) override;
     bool InitiateMerge(const std::string& misc_name) override;
@@ -104,6 +107,7 @@ class SnapshotHandlerManager final : public ISnapshotHandlerManager {
     void TerminateMergeThreads() override;
     double GetMergePercentage() override;
     bool GetVerificationStatus() override;
+    void DisableVerification() override { perform_verification_ = false; }
 
   private:
     bool StartHandler(const std::shared_ptr<HandlerThread>& handler);
@@ -128,6 +132,7 @@ class SnapshotHandlerManager final : public ISnapshotHandlerManager {
     int num_partitions_merge_complete_ = 0;
     std::queue<std::shared_ptr<HandlerThread>> merge_handlers_;
     android::base::unique_fd monitor_merge_event_fd_;
+    bool perform_verification_ = true;
 };
 
 }  // namespace snapshot

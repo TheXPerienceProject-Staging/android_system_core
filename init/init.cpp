@@ -112,6 +112,7 @@ using android::base::SetProperty;
 using android::base::StringPrintf;
 using android::base::Timer;
 using android::base::Trim;
+using android::base::unique_fd;
 using android::fs_mgr::AvbHandle;
 using android::snapshot::SnapshotManager;
 using android::fs_mgr::Fstab;
@@ -128,9 +129,20 @@ bool DeferOverlayfsMount() {
 }
 }
 
+#define PART_INFO_PATH "/sys/devices/soc0/"
+#define PART_PROP_NAME "ro.boot.vendor.qspa."
+
+std::vector<std::string> parts = {"gpu", "video", "camera", "display", "audio", "modem",
+        "wlan", "comp", "sensors", "npu", "spss", "nav", "comp1", "display1", "nsp", "eva"};
+
+struct PartInfo {
+    std::string part;
+    std::vector<int32_t> subpart_data;
+};
+
 static int property_triggers_enabled = 0;
 
-static int signal_fd = -1;
+static int sigterm_fd = -1;
 static int property_fd = -1;
 
 struct PendingControlMessage {
@@ -727,8 +739,9 @@ static void HandleSigtermSignal(const signalfd_siginfo& siginfo) {
     HandlePowerctlMessage("shutdown,container");
 }
 
-static void HandleSignalFd() {
+static void HandleSignalFd(int signal) {
     signalfd_siginfo siginfo;
+    const int signal_fd = signal == SIGCHLD ? Service::GetSigchldFd() : sigterm_fd;
     ssize_t bytes_read = TEMP_FAILURE_RETRY(read(signal_fd, &siginfo, sizeof(siginfo)));
     if (bytes_read != sizeof(siginfo)) {
         PLOG(ERROR) << "Failed to read siginfo from signal_fd";
@@ -762,25 +775,33 @@ static void UnblockSignals() {
     }
 }
 
+static Result<void> RegisterSignalFd(Epoll* epoll, int signal, int fd) {
+    return epoll->RegisterHandler(
+            fd, [signal]() { HandleSignalFd(signal); }, EPOLLIN | EPOLLPRI);
+}
+
+static Result<int> CreateAndRegisterSignalFd(Epoll* epoll, int signal) {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, signal);
+    if (sigprocmask(SIG_BLOCK, &mask, nullptr) == -1) {
+        return ErrnoError() << "failed to block signal " << signal;
+    }
+
+    unique_fd signal_fd(signalfd(-1, &mask, SFD_CLOEXEC));
+    if (signal_fd.get() < 0) {
+        return ErrnoError() << "failed to create signalfd for signal " << signal;
+    }
+    OR_RETURN(RegisterSignalFd(epoll, signal, signal_fd.get()));
+
+    return signal_fd.release();
+}
+
 static void InstallSignalFdHandler(Epoll* epoll) {
     // Applying SA_NOCLDSTOP to a defaulted SIGCHLD handler prevents the signalfd from receiving
     // SIGCHLD when a child process stops or continues (b/77867680#comment9).
-    const struct sigaction act { .sa_handler = SIG_DFL, .sa_flags = SA_NOCLDSTOP };
+    const struct sigaction act { .sa_flags = SA_NOCLDSTOP, .sa_handler = SIG_DFL };
     sigaction(SIGCHLD, &act, nullptr);
-
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGCHLD);
-
-    if (!IsRebootCapable()) {
-        // If init does not have the CAP_SYS_BOOT capability, it is running in a container.
-        // In that case, receiving SIGTERM will cause the system to shut down.
-        sigaddset(&mask, SIGTERM);
-    }
-
-    if (sigprocmask(SIG_BLOCK, &mask, nullptr) == -1) {
-        PLOG(FATAL) << "failed to block signals";
-    }
 
     // Register a handler to unblock signals in the child processes.
     const int result = pthread_atfork(nullptr, nullptr, &UnblockSignals);
@@ -788,14 +809,17 @@ static void InstallSignalFdHandler(Epoll* epoll) {
         LOG(FATAL) << "Failed to register a fork handler: " << strerror(result);
     }
 
-    signal_fd = signalfd(-1, &mask, SFD_CLOEXEC);
-    if (signal_fd == -1) {
-        PLOG(FATAL) << "failed to create signalfd";
+    Result<void> cs_result = RegisterSignalFd(epoll, SIGCHLD, Service::GetSigchldFd());
+    if (!cs_result.ok()) {
+        PLOG(FATAL) << cs_result.error();
     }
 
-    constexpr int flags = EPOLLIN | EPOLLPRI;
-    if (auto result = epoll->RegisterHandler(signal_fd, HandleSignalFd, flags); !result.ok()) {
-        LOG(FATAL) << result.error();
+    if (!IsRebootCapable()) {
+        Result<int> cs_result = CreateAndRegisterSignalFd(epoll, SIGTERM);
+        if (!cs_result.ok()) {
+            PLOG(FATAL) << cs_result.error();
+        }
+        sigterm_fd = cs_result.value();
     }
 }
 
@@ -927,6 +951,56 @@ static Result<void> ConnectEarlyStageSnapuserdAction(const BuiltinArguments& arg
         LOG(FATAL) << "Could not start snapuserd_proxy: " << result.error();
     }
     return {};
+}
+
+static void setQspaInitProp (std::string partName, int32_t part_value,
+        bool hasMultiplePart = false, int partNumber = 0) {
+    std::string prop_name (PART_PROP_NAME);
+    prop_name.append(partName.c_str());
+    if (hasMultiplePart) {
+        prop_name.append(std::to_string(partNumber));
+    }
+    if ((part_value & 1) != 0) {
+        SetProperty(prop_name.c_str(), "disabled");
+    } else {
+        SetProperty(prop_name.c_str(), "enabled");
+    }
+}
+
+static int SetQspaProperties() {
+    for (size_t i = 0; i < parts.size(); i++) {
+        std::string subpart_path(PART_INFO_PATH);
+        subpart_path.append(parts[i]);
+        std::fstream fin;
+        fin.open(subpart_path, std::ios::in);
+        std::string line;
+        if (!fin) {
+            continue;
+        }
+        if (!getline(fin, line)) {
+            continue;
+        }
+        std::stringstream data(line);
+        std::string intermediate;
+        std::vector<int32_t> tokens;
+        PartInfo partinfo;
+        partinfo.part = parts[i];
+        // Tokenizing w.r.t ','
+        while (getline(data, intermediate, ',')) {
+            int32_t part_value = stoi(intermediate,0,16);
+            tokens.push_back(part_value);
+        }
+        partinfo.subpart_data = tokens;
+        int size = tokens.size();
+        if (size > 1) {
+            for (int i = 0; i < size; i++) {
+                setQspaInitProp(partinfo.part, tokens[i], true, i);
+            }
+        } else if (size == 1) {
+            setQspaInitProp(partinfo.part, tokens[0]);
+        }
+    }
+    return 0;
 }
 
 int SecondStageMain(int argc, char** argv) {
@@ -1064,6 +1138,11 @@ int SecondStageMain(int argc, char** argv) {
 
     InitializeSubcontext();
 
+    std::string qspaEnabled = GetProperty("ro.boot.vendor.qspa", "");
+    if (qspaEnabled == "true") {
+        SetQspaProperties();
+    }
+
     ActionManager& am = ActionManager::GetInstance();
     ServiceList& sm = ServiceList::GetInstance();
 
@@ -1088,8 +1167,8 @@ int SecondStageMain(int argc, char** argv) {
     am.QueueBuiltinAction(SetupCgroupsAction, "SetupCgroups");
     am.QueueBuiltinAction(SetKptrRestrictAction, "SetKptrRestrict");
     am.QueueBuiltinAction(TestPerfEventSelinuxAction, "TestPerfEventSelinux");
-    am.QueueBuiltinAction(ConnectEarlyStageSnapuserdAction, "ConnectEarlyStageSnapuserd");
     am.QueueEventTrigger("early-init");
+    am.QueueBuiltinAction(ConnectEarlyStageSnapuserdAction, "ConnectEarlyStageSnapuserd");
 
     // Queue an action that waits for coldboot done so we know ueventd has set up all of /dev...
     am.QueueBuiltinAction(wait_for_coldboot_done_action, "wait_for_coldboot_done");

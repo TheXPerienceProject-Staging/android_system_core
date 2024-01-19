@@ -273,10 +273,11 @@ bool CowWriterV2::OpenForAppend(uint64_t label) {
     if (!ReadCowHeader(fd_, &header_v3)) {
         return false;
     }
+
     header_ = header_v3;
 
     CowParserV2 parser;
-    if (!parser.Parse(fd_, header_, {label})) {
+    if (!parser.Parse(fd_, header_v3, {label})) {
         return false;
     }
     if (header_.prefix.major_version > 2) {
@@ -292,7 +293,7 @@ bool CowWriterV2::OpenForAppend(uint64_t label) {
     footer_.op.num_ops = 0;
     InitPos();
 
-    for (const auto& op : *parser.ops()) {
+    for (const auto& op : *parser.get_v2ops()) {
         AddOperation(op);
     }
 
@@ -368,7 +369,7 @@ bool CowWriterV2::CompressBlocks(size_t num_blocks, const void* data) {
 }
 
 bool CowWriterV2::EmitBlocks(uint64_t new_block_start, const void* data, size_t size,
-                             uint64_t old_block, uint16_t offset, uint8_t type) {
+                             uint64_t old_block, uint16_t offset, CowOperationType type) {
     CHECK(!merge_in_progress_);
     const uint8_t* iter = reinterpret_cast<const uint8_t*>(data);
 
