@@ -51,7 +51,7 @@
 #include <android/set_abort_message.h>
 #include <bionic/macros.h>
 #include <bionic/reserved_signals.h>
-#include <bionic/set_abort_message_internal.h>
+#include <bionic/crash_detail_internal.h>
 #include <log/log.h>
 #include <log/log_read.h>
 #include <log/logprint.h>
@@ -96,6 +96,11 @@ static Architecture get_arch() {
 
 static std::optional<std::string> get_stack_overflow_cause(uint64_t fault_addr, uint64_t sp,
                                                            unwindstack::Maps* maps) {
+  // Under stack MTE the stack pointer and/or the fault address can be tagged.
+  // In order to calculate deltas between them, strip off the tags off both
+  // addresses.
+  fault_addr = untag_address(fault_addr);
+  sp = untag_address(sp);
   static constexpr uint64_t kMaxDifferenceBytes = 256;
   uint64_t difference;
   if (sp >= fault_addr) {
