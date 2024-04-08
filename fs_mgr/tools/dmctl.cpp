@@ -52,6 +52,7 @@ static int Usage(void) {
     std::cerr << "  list <devices | targets> [-v]" << std::endl;
     std::cerr << "  getpath <dm-name>" << std::endl;
     std::cerr << "  getuuid <dm-name>" << std::endl;
+    std::cerr << "  ima <dm-name>" << std::endl;
     std::cerr << "  info <dm-name>" << std::endl;
     std::cerr << "  replace <dm-name> <targets...>" << std::endl;
     std::cerr << "  status <dm-name>" << std::endl;
@@ -115,6 +116,21 @@ class TargetParser final {
             std::string block_device = NextArg();
             return std::make_unique<DmTargetAndroidVerity>(start_sector, num_sectors, keyid,
                                                            block_device);
+        } else if (target_type == "striped") {
+            if (!HasArgs(3)) {
+                std::cerr << "Expected \"striped\" <block_device0> <block_device1> <chunksize>"
+                          << std::endl;
+                return nullptr;
+            }
+            std::string block_device0 = NextArg();
+            std::string block_device1 = NextArg();
+            uint64_t chunk_size;
+            if (!android::base::ParseUint(NextArg(), &chunk_size)) {
+                std::cerr << "Expected start sector, got: " << PreviousArg() << std::endl;
+                return nullptr;
+            }
+            return std::make_unique<DmTargetStripe>(start_sector, num_sectors, chunk_size,
+                                                    block_device0, block_device1);
         } else if (target_type == "bow") {
             if (!HasArgs(1)) {
                 std::cerr << "Expected \"bow\" <block_device>" << std::endl;
@@ -493,7 +509,14 @@ static int DumpTable(const std::string& mode, int argc, char** argv) {
                       << std::endl;
             return -EINVAL;
         }
+    } else if (mode == "ima") {
+        if (!dm.GetTableStatusIma(argv[0], &table)) {
+            std::cerr << "Could not query table status of device \"" << argv[0] << "\"."
+                      << std::endl;
+            return -EINVAL;
+        }
     }
+
     std::cout << "Targets in the device-mapper table for " << argv[0] << ":" << std::endl;
     for (const auto& target : table) {
         std::cout << target.spec.sector_start << "-"
@@ -513,6 +536,10 @@ static int TableCmdHandler(int argc, char** argv) {
 
 static int StatusCmdHandler(int argc, char** argv) {
     return DumpTable("status", argc, argv);
+}
+
+static int ImaCmdHandler(int argc, char** argv) {
+    return DumpTable("ima", argc, argv);
 }
 
 static int ResumeCmdHandler(int argc, char** argv) {
@@ -555,6 +582,7 @@ static std::map<std::string, std::function<int(int, char**)>> cmdmap = {
         {"info", InfoCmdHandler},
         {"table", TableCmdHandler},
         {"status", StatusCmdHandler},
+        {"ima", ImaCmdHandler},
         {"resume", ResumeCmdHandler},
         {"suspend", SuspendCmdHandler},
         // clang-format on
