@@ -665,6 +665,8 @@ on post-fs
     mkdir /metadata/aconfig 0775 root system
     mkdir /metadata/aconfig/flags 0770 root system
     mkdir /metadata/aconfig/boot 0775 root system
+
+    mkdir /metadata/aconfig_test_missions 0775 root system
     exec_start aconfigd-init
     start aconfigd
 
@@ -1039,7 +1041,7 @@ on post-fs-data
     perform_apex_config
 
     # Create directories for boot animation.
-    mkdir /data/misc/bootanim 0755 system system encryption=DeleteIfNecessary
+    mkdir /data/misc/bootanim 0755 system system
 
     exec_start derive_sdk
 
