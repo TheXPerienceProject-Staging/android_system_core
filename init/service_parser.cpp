@@ -680,12 +680,12 @@ Result<void> ServiceParser::EndSection() {
     }
 
     if (service_->proc_attr_.parsed_uid == std::nullopt) {
-        if (android::base::GetIntProperty("ro.vendor.api_level", 0) > __ANDROID_API_V__) {
+        if (android::base::GetIntProperty("ro.vendor.api_level", 0) > __ANDROID_API_U__) {
             return Error() << "No user specified for service '" << service_->name()
-                           << "', so it would have been root.";
+                           << "'. Defaults to root.";
         } else {
             LOG(WARNING) << "No user specified for service '" << service_->name()
-                         << "', so it is root.";
+                         << "'. Defaults to root.";
         }
     }
 
