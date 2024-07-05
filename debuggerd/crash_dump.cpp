@@ -83,7 +83,7 @@ using android::base::unique_fd;
 
 // This stores guest architecture. When the architecture is supported, tombstone file will output
 // guest state information.
-static Architecture g_guest_arch;
+static Architecture g_guest_arch = Architecture::NONE;
 
 static bool pid_contains_tid(int pid_proc_fd, pid_t tid) {
   struct stat st;
@@ -303,28 +303,27 @@ static void ReadCrashInfo(unique_fd& fd, siginfo_t* siginfo,
   *recoverable_crash = false;
   if (rc == -1) {
     PLOG(FATAL) << "failed to read target ucontext";
-  } else {
-    ssize_t expected_size = 0;
-    switch (crash_info->header.version) {
-      case 1:
-      case 2:
-      case 3:
-        expected_size = sizeof(CrashInfoHeader) + sizeof(CrashInfoDataStatic);
-        break;
+  }
+  ssize_t expected_size = 0;
+  switch (crash_info->header.version) {
+    case 1:
+    case 2:
+    case 3:
+      expected_size = sizeof(CrashInfoHeader) + sizeof(CrashInfoDataStatic);
+      break;
 
-      case 4:
-        expected_size = sizeof(CrashInfoHeader) + sizeof(CrashInfoDataDynamic);
-        break;
+    case 4:
+      expected_size = sizeof(CrashInfoHeader) + sizeof(CrashInfoDataDynamic);
+      break;
 
-      default:
-        LOG(FATAL) << "unexpected CrashInfo version: " << crash_info->header.version;
-        break;
-    };
+    default:
+      LOG(FATAL) << "unexpected CrashInfo version: " << crash_info->header.version;
+      break;
+  }
 
-    if (rc < expected_size) {
-      LOG(FATAL) << "read " << rc << " bytes when reading target crash information, expected "
-                 << expected_size;
-    }
+  if (rc < expected_size) {
+    LOG(FATAL) << "read " << rc << " bytes when reading target crash information, expected "
+                << expected_size;
   }
 
   switch (crash_info->header.version) {
@@ -450,7 +449,16 @@ static bool GetGuestRegistersFromCrashedProcess([[maybe_unused]] pid_t tid,
 
   if (ptrace(PTRACE_GETREGSET, tid, NT_ARM_TLS, &pt_iov) != 0) {
     PLOG(ERROR) << "failed to read thread register for thread " << tid;
+    return false;
   }
+#elif defined(__riscv)
+  struct user_regs_struct regs;
+  struct iovec pt_iov = {.iov_base = &regs, .iov_len = sizeof(regs)};
+  if (ptrace(PTRACE_GETREGSET, tid, NT_PRSTATUS, &pt_iov) != 0) {
+    PLOG(ERROR) << "failed to read thread register for thread " << tid;
+    return false;
+  }
+  base = reinterpret_cast<uintptr_t>(regs.tp);
 #else
   // TODO(b/339287219): Add case for Riscv host.
   return false;
@@ -781,10 +789,6 @@ int main(int argc, char** argv) {
       ATRACE_NAME("engrave_tombstone");
       unwindstack::ArchEnum regs_arch = unwindstack::ARCH_UNKNOWN;
       switch (g_guest_arch) {
-        case Architecture::ARM32: {
-          regs_arch = unwindstack::ARCH_ARM;
-          break;
-        }
         case Architecture::ARM64: {
           regs_arch = unwindstack::ARCH_ARM64;
           break;
