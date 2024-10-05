@@ -1014,7 +1014,7 @@ void BatteryMonitor::init(struct healthd_config *hc) {
                 break;
             // Fixes Battery status on some old devices
             case ANDROID_POWER_SUPPLY_TYPE_BMS:
-                if (mHealthdConfig->batteryFullChargePath.isEmpty()) {
+                if (mHealthdConfig->batteryFullChargePath.empty()) {
                     path.clear();
                     path.appendFormat("%s/%s/charge_full",
                                       POWER_SUPPLY_SYSFS_PATH, name);
